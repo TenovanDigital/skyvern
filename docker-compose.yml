@@ -1,31 +1,28 @@
-version: '3.8'
-
 services:
-  postgres:
-    image: postgres:14-alpine
-    restart: always
-    # comment out if you want to externally connect DB
-    # ports:
-    #   - 5432:5432
-    volumes:
-      - ./postgres-data:/var/lib/postgresql/data
-    environment:
-      - PGDATA=/var/lib/postgresql/data/pgdata
-      - POSTGRES_USER=skyvern
-      - POSTGRES_PASSWORD=skyvern
-      - POSTGRES_POSTGRES_DB=skyvern
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U skyvern"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   skyvern:
-    image: public.ecr.aws/skyvern/skyvern:latest
-    restart: on-failure
+    container_name: skyvern
+    #image: public.ecr.aws/skyvern/skyvern:latest
+    build:
+      context: .
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      # HTTP Routers
+      - "traefik.http.routers.skyvern.entrypoints=web-external"
+      - "traefik.http.routers.skyvern.rule=Host(`${SUBDOMAIN}.${DOMAIN}`) && PathPrefix(`/skyvern/api`)"
+      # HTTPS Routers
+      - "traefik.http.routers.skyvern-secure.entrypoints=websecure-external"
+      - "traefik.http.routers.skyvern-secure.rule=Host(`${SUBDOMAIN}.${DOMAIN}`) && PathPrefix(`/skyvern/api`)"
+      - "traefik.http.routers.skyvern-secure.service=skyvern"
+      # Network
+      - "traefik.http.services.skyvern.loadbalancer.server.port=8001"
+      - "traefik.docker.network=traefik-proxy"
+    networks:
+      - default
+      - traefik-proxy
     # comment out if you want to externally call skyvern API
     ports:
-      - 8000:8000
+      - 8001:8000
     volumes:
       - ./artifacts:/data/artifacts
       - ./videos:/data/videos
@@ -33,10 +30,10 @@ services:
       - ./log:/data/log
       - ./.streamlit:/app/.streamlit
     environment:
-      - DATABASE_STRING=postgresql+psycopg://skyvern:skyvern@postgres:5432/skyvern
+      - DATABASE_STRING="postgresql+psycopg://skyvern:${SKYVERN_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?options=-csearch_path=skyvern"
       - BROWSER_TYPE=chromium-headful
       - ENABLE_OPENAI=true
-      - OPENAI_API_KEY=<your_openai_key>
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       # If you want to use other LLM provider, like azure and anthropic:
       # - ENABLE_ANTHROPIC=true
       # - LLM_KEY=ANTHROPIC_CLAUDE3_OPUS
@@ -48,7 +45,7 @@ services:
       # - AZURE_API_BASE=<your_azure_api_base>
       # - AZURE_API_VERSION=<your_azure_api_version>
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "test", "-f", "/app/.streamlit/secrets.toml"]
@@ -57,10 +54,27 @@ services:
       retries: 5
 
   skyvern-ui:
+    container_name: skyvern-ui
     image: public.ecr.aws/skyvern/skyvern-ui:latest
-    restart: on-failure
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      # HTTP Routers
+      - "traefik.http.routers.skyvern-ui.entrypoints=web"
+      - "traefik.http.routers.skyvern-ui.rule=Host(`${SUBDOMAIN}.${DOMAIN}`) && PathPrefix(`/skyvern`) && !PathPrefix(`/skyvern/api`)"
+      # HTTPS Routers
+      - "traefik.http.routers.skyvern-ui-secure.entrypoints=websecure"
+      - "traefik.http.routers.skyvern-ui-secure.rule=Host(`${SUBDOMAIN}.${DOMAIN}`) && PathPrefix(`/skyvern`) && !PathPrefix(`/skyvern/api`)"
+      - "traefik.http.routers.skyvern-ui-secure.service=skyvern-ui"
+      # Network
+      - "traefik.http.services.skyvern-ui.loadbalancer.server.port=8081"
+      - "traefik.http.services.skyvern-ui-secure.loadbalancer.server.port=9090"
+      - "traefik.docker.network=traefik-proxy"
+    networks:
+      - default
+      - traefik-proxy
     ports:
-      - 8080:8080
+      - 8081:8080
       - 9090:9090
     volumes:
       - ./artifacts:/data/artifacts
@@ -70,8 +84,8 @@ services:
     environment:
     # if you want to run skyvern on a remote server,
     # you need to change the host in VITE_WSS_BASE_URL and VITE_API_BASE_URL to match your server ip
-      - VITE_WSS_BASE_URL=ws://localhost:8000/api/v1
-    #   - VITE_API_BASE_URL=http://localhost:8000/api/v1
+      - VITE_WSS_BASE_URL=ws://skyvern:8001/api/v1
+      - VITE_API_BASE_URL=http://skyvern:8001/api/v1
     #   - VITE_SKYVERN_API_KEY=
     depends_on:
       skyvern:
